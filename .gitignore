@@ -1,0 +1,10 @@
+# Large binary files
+*.pdf
+*.db
+
+# ADK session databases
+.adk/
+
+# Python cache
+__pycache__/
+*.pyc
