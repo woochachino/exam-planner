@@ -33,7 +33,7 @@ COORDINATOR_INSTRUCTION = """You are the Exam Study Planner Coordinator.
 - No topics -> "Upload your course PDFs so I can extract topics"
 - No dates -> "When are your exams?"
 
-Keep it simple and helpful!"""
+Keep it cocnise/helpful!"""
 
 
 root_agent = LlmAgent(

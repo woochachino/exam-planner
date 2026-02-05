@@ -1,18 +1,44 @@
-"""Survey tools for learner profiling - only questions that affect scheduling."""
-
 from google.adk.tools import ToolContext
 
 
-# Only questions that actually affect the schedule
 SURVEY_QUESTIONS = {
     "focus_duration": {
         "id": "focus_duration",
         "question": "How long can you typically maintain deep focus before needing a break?",
         "options": [
-            {"key": "a", "text": "Less than 30 minutes", "maps_to": {"max_daily_deep_hours": 4}},
-            {"key": "b", "text": "30-60 minutes", "maps_to": {"max_daily_deep_hours": 5}},
-            {"key": "c", "text": "1-2 hours", "maps_to": {"max_daily_deep_hours": 6}},
-            {"key": "d", "text": "More than 2 hours", "maps_to": {"max_daily_deep_hours": 8}},
+            {
+                "key": "a", 
+                "text": "Less than 30 minutes",
+                "maps_to": {
+                      "max_daily_deep_hours": 4, # per-day study limit
+                      "max_session_time": 0.5 # per-session study limit
+                }
+            },
+            {
+                "key": "b", 
+                "text": "30-60 minutes",
+                "maps_to": {
+                    "max_daily_deep_hours": 5,
+                    "max_session_time": 1
+                }
+            },
+
+            {
+                "key": "c",
+                "text": "1-2 hours",
+                "maps_to": {
+                    "max_daily_deep_hours": 6,
+                    "max_session_time": 1.5
+                }
+            },
+            {
+                "key": "d",
+                "text": "More than 2 hours",
+                "maps_to": {
+                    "max_daily_deep_hours": 8,
+                    "max_session_time": 2
+                }
+            },
         ],
     },
     "peak_time": {
@@ -77,12 +103,12 @@ def process_survey_response(question_id: str, answer: str, tool_context: ToolCon
     if answer not in valid_answers:
         return {"status": "invalid_answer", "message": f"Please answer with: {', '.join(valid_answers)}"}
 
-    # Store response
+    # store response
     responses = tool_context.state.get("survey_responses", {})
     responses[question_id] = answer
     tool_context.state["survey_responses"] = responses
 
-    # Get next question
+    # get next question
     question_ids = list(SURVEY_QUESTIONS.keys())
     current_idx = question_ids.index(question_id)
 
@@ -111,13 +137,13 @@ def calculate_profile_scores(tool_context: ToolContext) -> dict:
     if not responses:
         return {"status": "error", "message": "No survey responses found"}
 
-    # Simple profile with only values that affect scheduling
+    # simple profile with ONLY values that affect scheduling
     profile = {
         "session_profile": {"max_daily_deep_hours": 6},
         "chronotype": {"peak_windows": ["17:00"]},
     }
 
-    # Apply responses
+    # apply responses
     for q_id, answer in responses.items():
         if q_id not in SURVEY_QUESTIONS:
             continue

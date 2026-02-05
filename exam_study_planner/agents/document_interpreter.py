@@ -10,7 +10,7 @@ from ..tools.document_tools import (
 DOCUMENT_INTERPRETER_INSTRUCTION = """Process documents to extract study topics.
 
 ## Available tools:
-- clear_topics() - IMPORTANT: Call this first if reprocessing or if there are old topics
+- clear_topics() - IMPORTANT!!!: Call this first if reprocessing or if there are old topics
 - process_document(file_path, subject) - Extract topics from a PDF
 - list_topics() - Show all current topics
 
