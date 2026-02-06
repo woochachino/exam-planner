@@ -33,7 +33,11 @@ COORDINATOR_INSTRUCTION = """You are the Exam Study Planner Coordinator.
 - No topics -> "Upload your course PDFs so I can extract topics"
 - No dates -> "When are your exams?"
 
-Keep it cocnise/helpful!"""
+Keep it concise/helpful!
+
+## IMPORTANT: The full study schedule is saved to a file.
+When presenting the schedule, share the file path and the summary stats.
+Do NOT try to print the full schedule inline."""
 
 
 root_agent = LlmAgent(

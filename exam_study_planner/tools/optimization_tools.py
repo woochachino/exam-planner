@@ -23,9 +23,6 @@ def generate_schedule(
     if not topics:
         return {"status": "error", "message": "No topics found. Process documents first."}
 
-    if len(topics) > 100:
-        return {"status": "error", "message": f"Too many topics ({len(topics)}). Run clear_topics() first."}
-
     # user preferences
     session_profile = profile.get("session_profile", {})
     max_daily = session_profile.get("max_daily_deep_hours", 6)
@@ -37,7 +34,7 @@ def generate_schedule(
     total_needed = sum(t.get("estimated_hours", 1) for t in topics)
     scale = min(1.5, total_avail / total_needed) if total_needed > 0 else 1
 
-    # alternating subject/topic queue for variety
+    # organize topics by subject, preserving order
     by_subject = {}
     for t in topics:
         subj = t.get("subject", "General")
@@ -52,61 +49,92 @@ def generate_schedule(
             "complexity": t.get("complexity", 0.5),
         })
 
-    # 
     subjects = list(by_subject.keys())
-    queue = []
-    max_len = max(len(by_subject[s]) for s in subjects)
-    for i in range(max_len):
-        for subj in subjects:
-            if i < len(by_subject[subj]):
-                queue.append(by_subject[subj][i])
+    # flat list for summary tracking
+    all_items = [item for subj in subjects for item in by_subject[subj]]
 
-    # build schedule
+    # track current topic index per subject
+    subj_idx = {s: 0 for s in subjects}
+
+    # build schedule day by day
     days = []
     current = start
-    queue_idx = 0
 
-    while current <= end and queue_idx < len(queue) * 3:  # limit
+    while current <= end:
+        # calculate remaining hours per subject
+        subj_remaining = {}
+        for s in subjects:
+            rem = sum(t["remaining"] for t in by_subject[s])
+            if rem >= 0.25:
+                subj_remaining[s] = rem
+
+        if not subj_remaining:
+            break
+
+        # allocate daily hours proportionally to each subject's remaining workload
+        total_remaining = sum(subj_remaining.values())
+        subj_daily_budget = {}
+        for s, rem in subj_remaining.items():
+            subj_daily_budget[s] = round((rem / total_remaining) * max_daily, 2)
+
         sessions = []
         day_hours = 0
         time = 8.0
-        topics_today = set()  # track the topics scheduled today (avoid excessive repeats)
 
-        # fill day with varied topics
-        scan_start = queue_idx
-        scanned = 0
+        # round-robin through subjects with remaining work
+        active_subjects = sorted(subj_remaining.keys(), key=lambda s: -subj_remaining[s])
+        subj_time_used = {s: 0 for s in active_subjects}
 
-        while day_hours < max_daily and scanned < len(queue):
-            topic = queue[queue_idx % len(queue)]
-            queue_idx += 1
-            scanned += 1
+        keep_going = True
+        while day_hours < max_daily and keep_going:
+            keep_going = False
+            for s in active_subjects:
+                if day_hours >= max_daily:
+                    break
 
-            # skip if already scheduled today OR completed
-            if topic["id"] in topics_today or topic["remaining"] < 0.25:
-                continue
+                budget_left = subj_daily_budget.get(s, 0) - subj_time_used[s]
+                if budget_left < 0.25:
+                    continue
 
-            # schedule time per study SESSION
-            session_hours = min(max_session, topic["remaining"], max_daily - day_hours)
-            if session_hours < 0.25:
-                continue
+                # find next topic with remaining time in this subject
+                topic = None
+                while subj_idx[s] < len(by_subject[s]):
+                    candidate = by_subject[s][subj_idx[s]]
+                    if candidate["remaining"] >= 0.25:
+                        topic = candidate
+                        break
+                    subj_idx[s] += 1
 
-            # skip lunch
-            if 12 <= time < 13:
-                time = 13
+                if topic is None:
+                    continue
 
-            sessions.append({
-                "topic_id": topic["id"],
-                "subject": topic["subject"],
-                "title": topic["title"],
-                "start_time": f"{int(time):02d}:{int((time % 1) * 60):02d}",
-                "duration_hours": round(session_hours, 1),
-                "complexity": topic["complexity"],
-            })
+                session_hours = min(max_session, topic["remaining"], budget_left, max_daily - day_hours)
+                if session_hours < 0.25:
+                    continue
 
-            topic["remaining"] -= session_hours
-            day_hours += session_hours
-            time += session_hours + 0.25
-            topics_today.add(topic["id"])
+                # skip lunch
+                if 12 <= time < 13:
+                    time = 13
+
+                sessions.append({
+                    "topic_id": topic["id"],
+                    "subject": topic["subject"],
+                    "title": topic["title"],
+                    "start_time": f"{int(time):02d}:{int((time % 1) * 60):02d}",
+                    "duration_hours": round(session_hours, 1),
+                    "complexity": topic["complexity"],
+                })
+
+                topic["remaining"] -= session_hours
+                day_hours += session_hours
+                subj_time_used[s] += session_hours
+                time += session_hours + 0.25
+
+                # advance to next topic if this one is done
+                if topic["remaining"] < 0.25:
+                    subj_idx[s] += 1
+
+                keep_going = True
 
         if sessions:
             days.append({
@@ -117,10 +145,6 @@ def generate_schedule(
             })
 
         current += timedelta(days=1)
-
-        # check if all topics are done
-        if all(t["remaining"] < 0.25 for t in queue):
-            break
 
     # summary
     hrs_by_subj = {}
@@ -137,7 +161,7 @@ def generate_schedule(
             "total_study_hours": round(sum(d["total_hours"] for d in days), 1),
             "study_days": len(days),
             "hours_per_subject": {k: round(v, 1) for k, v in hrs_by_subj.items()},
-            "topics_scheduled": len([t for t in queue if t["remaining"] < t["total_hours"] - 0.1]),
+            "topics_scheduled": len([t for t in all_items if t["remaining"] < t["total_hours"] - 0.1]),
             "total_topics": len(topics),
         }
     }
@@ -154,28 +178,52 @@ def generate_schedule(
 
 
 def export_schedule_csv(tool_context: ToolContext) -> dict:
-    """Export schedule to CSV."""
+    """Export schedule to a CSV file and return the file path."""
+    import os
+
     schedule = tool_context.state.get("current_schedule", {})
     if not schedule:
         return {"status": "error", "message": "No schedule found"}
 
-    lines = ["Date,Day,Start,End,Subject,Topic,Hours"]
+    summary = schedule.get("summary", {})
+    lines = ["Date,Day,Start,End,Subject,Topic,Minutes"]
 
     for day in schedule.get("days", []):
         for s in day["sessions"]:
             title = s["title"][:50].replace(",", ";")
             start_h, start_m = map(int, s["start_time"].split(":"))
-            total_min = start_h * 60 + start_m + int(s["duration_hours"] * 60)
+            duration_min = int(s["duration_hours"] * 60)
+            total_min = start_h * 60 + start_m + duration_min
             end_time = f"{total_min // 60:02d}:{total_min % 60:02d}"
-            lines.append(f"{day['date']},{day['day_of_week']},{s['start_time']},{end_time},{s['subject']},{title},{s['duration_hours']}")
+            lines.append(f"{day['date']},{day['day_of_week']},{s['start_time']},{end_time},{s['subject']},{title},{duration_min}")
 
-    csv = "\n".join(lines)
-    tool_context.state["schedule_csv"] = csv
-    return {"status": "success", "content": csv, "rows": len(lines) - 1}
+    csv_content = "\n".join(lines)
+    tool_context.state["schedule_csv"] = csv_content
+
+    out_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_path = os.path.join(out_dir, "study_schedule.csv")
+    with open(out_path, "w") as f:
+        f.write(csv_content)
+
+    return {
+        "status": "success",
+        "file": out_path,
+        "rows": len(lines) - 1,
+        "summary": {
+            "period": f"{schedule['start_date']} to {schedule['end_date']}",
+            "total_hours": summary.get("total_study_hours", 0),
+            "study_days": summary.get("study_days", 0),
+            "topics_scheduled": f"{summary.get('topics_scheduled', 0)}/{summary.get('total_topics', 0)}",
+            "hours_per_subject": summary.get("hours_per_subject", {}),
+        },
+        "message": f"Full schedule saved to {out_path}",
+    }
 
 
 def export_schedule_markdown(tool_context: ToolContext) -> dict:
-    """Export schedule to Markdown."""
+    """Export schedule to Markdown file and return the file path."""
+    import os
+
     schedule = tool_context.state.get("current_schedule", {})
     if not schedule:
         return {"status": "error", "message": "No schedule found"}
@@ -214,7 +262,25 @@ def export_schedule_markdown(tool_context: ToolContext) -> dict:
 
     md = "\n".join(lines)
     tool_context.state["schedule_markdown"] = md
-    return {"status": "success", "content": md}
+
+    # save to file so the full schedule is viewable without LLM truncation
+    out_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_path = os.path.join(out_dir, "study_schedule.md")
+    with open(out_path, "w") as f:
+        f.write(md)
+
+    return {
+        "status": "success",
+        "file": out_path,
+        "summary": {
+            "period": f"{schedule['start_date']} to {schedule['end_date']}",
+            "total_hours": summary.get("total_study_hours", 0),
+            "study_days": summary.get("study_days", 0),
+            "topics_scheduled": f"{summary.get('topics_scheduled', 0)}/{summary.get('total_topics', 0)}",
+            "hours_per_subject": summary.get("hours_per_subject", {}),
+        },
+        "message": f"Full schedule saved to {out_path}",
+    }
 
 
 def add_exam(subject: str, exam_date: str, tool_context: ToolContext) -> dict:

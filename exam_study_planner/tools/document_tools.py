@@ -82,39 +82,37 @@ def _extract_structure(pdf_doc, total_pages: int) -> List[dict]:
                   'copyright page', 'appendix', 'answers', 'data sets', 'websites',
                   'odd-numbered', 'even-numbered'}
 
-    # Try TOC first - only level 1
+    # Try TOC first - level 1 and 2 (Parts + Chapters)
     toc = pdf_doc.get_toc()
     if toc:
         for level, title, page in toc:
             title_clean = title.strip()
             title_lower = title_clean.lower()
-            # Skip if exact match or contains skip words
-            if level == 1 and len(title_clean) > 2:
+            if level <= 2 and len(title_clean) > 2:
                 if title_lower not in skip_lower and not any(skip in title_lower for skip in skip_lower):
                     structure.append({"title": title_clean, "page": page})
 
-    # If no TOC, scan for chapter headings
+    # If no TOC, scan for chapter headings across ALL pages
     if len(structure) < 3:
         patterns = [
             r'^Chapter\s+\d+',
             r'^Unit\s+\d+',
             r'^Module\s+\d+',
-            r'^Part\s+[IVX\d]+',
             r'^\d+\.\s+[A-Z][a-z]',
         ]
-        found_pages = {s["page"] for s in structure}
+        seen_titles = set()
 
-        for page_num in range(min(total_pages, 50)):
-            if page_num + 1 in found_pages:
-                continue
+        for page_num in range(total_pages):
             text = pdf_doc[page_num].get_text()
-            for line in text.split('\n')[:15]:
+            for line in text.split('\n')[:10]:
                 line = line.strip()
-                if 5 < len(line) < 60 and line.lower() not in skip_lower:
+                if 5 < len(line) < 80 and line.lower() not in skip_lower:
                     for p in patterns:
                         if re.match(p, line, re.IGNORECASE):
-                            structure.append({"title": line, "page": page_num + 1})
-                            found_pages.add(page_num + 1)
+                            # deduplicate running headers
+                            if line not in seen_titles:
+                                seen_titles.add(line)
+                                structure.append({"title": line, "page": page_num + 1})
                             break
 
     # Fallback: create chunks by page ranges
